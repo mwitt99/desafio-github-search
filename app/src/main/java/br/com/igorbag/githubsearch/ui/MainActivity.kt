@@ -1,12 +1,17 @@
 package br.com.igorbag.githubsearch.ui
 
 import android.content.Context
-import android.content.Intent
-import android.net.Uri
+import android.net.ConnectivityManager
 import android.os.Bundle
+import android.net.NetworkCapabilities
+import android.os.Build
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.ProgressBar
+import android.widget.TextView
+import android.widget.Toast
+import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.isVisible
 import androidx.recyclerview.widget.RecyclerView
@@ -14,15 +19,11 @@ import br.com.igorbag.githubsearch.R
 import br.com.igorbag.githubsearch.data.GitHubService
 import br.com.igorbag.githubsearch.domain.Repository
 import br.com.igorbag.githubsearch.ui.adapter.RepositoryAdapter
-import org.w3c.dom.Comment
 import retrofit2.Call
 import retrofit2.Callback
 import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
-import retrofit2.create
-import retrofit2.http.Url
-import java.nio.file.Files
 
 class MainActivity : AppCompatActivity() {
 
@@ -31,15 +32,19 @@ class MainActivity : AppCompatActivity() {
     lateinit var listaRepositories: RecyclerView
     lateinit var githubApi: GitHubService
     lateinit var progress: ProgressBar
+    lateinit var ivWifiOff: ImageView
+    lateinit var txtWifiOff: TextView
+
 
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        //Habilitando exibição do ícone do app
+        supportActionBar?.setDisplayShowHomeEnabled(true)
         setContentView(R.layout.activity_main)
         setupView()
         showUserName()
         setupRetrofit()
-        getAllReposByUserName()
         setupListeners()
 
     }
@@ -48,104 +53,126 @@ class MainActivity : AppCompatActivity() {
     fun setupView() {
         nomeUsuario = findViewById(R.id.et_nome_usuario)
         btnConfirmar = findViewById(R.id.btn_confirmar)
-        listaRepositories = findViewById(R.id.tv_repositorio)
+        listaRepositories = findViewById(R.id.rv_lista_repositories)
+        progress = findViewById(R.id.pb_carregamento)
+        ivWifiOff = findViewById(R.id.iv_wifi_off)
+        txtWifiOff = findViewById(R.id.tv_wifi_off)
     }
 
     //metodo responsavel por configurar os listeners click da tela
     private fun setupListeners() {
         btnConfirmar.setOnClickListener {
-            saveUserLocal()
-        }
-        btnConfirmar.setOnClickListener {
-            finish()
+            val conection = isInternetAvailable()
+
+            if(!conection){
+                ivWifiOff.isVisible = true
+                txtWifiOff.isVisible = true
+            }else{
+                ivWifiOff.isVisible = false
+                txtWifiOff.isVisible = false
+
+                val nomePesquisar = nomeUsuario.text.toString()
+                getAllReposByUserName(nomePesquisar)
+                saveUserLocal()
+                //Para que desapareça quando for fazer nossas pesquisas
+                listaRepositories.isVisible = false
+            }
         }
     }
 
 
     // salvar o usuario preenchido no EditText utilizando uma SharedPreferences
     private fun saveUserLocal() {
-        //@TODO 3 - Persistir o usuario preenchido na editText com a SharedPref no listener do botao salvar
+        val usuarioInformado = nomeUsuario.text.toString()
         val sharedPref = getPreferences(Context.MODE_PRIVATE) ?: return
         with(sharedPref.edit()) {
-            putFloat(getString(R.string.saved_user), 1f)
-
+            putString("saved_username", usuarioInformado)
         }
     }
 
     private fun showUserName() {
-        //@TODO 4- depois de persistir o usuario exibir sempre as informacoes no EditText  se a sharedpref possuir algum valor, exibir no proprio editText o valor salvo
+        val sharedPreferences = getPreferences(MODE_PRIVATE) ?: return
+        val ultimoPesquisado = sharedPreferences.getString("saved_username", null)
 
+        if(!ultimoPesquisado.isNullOrEmpty()){
+            nomeUsuario.setText(ultimoPesquisado)
+        }
     }
 
     //Metodo responsavel por fazer a configuracao base do Retrofit
     fun setupRetrofit() {
         val retrofit = Retrofit.Builder()
-            .addConverterFactory(GsonConverterFactory.create())
             .baseUrl("https://api.github.com/")
+            .addConverterFactory(GsonConverterFactory.create())
             .build()
-            githubApi = retrofit.create(GitHubService::class.java)
+        githubApi = retrofit.create(GitHubService::class.java)
 
 
     }
 
     //Metodo responsavel por buscar todos os repositorios do usuario fornecido
-    fun getAllReposByUserName() {
-        // TODO 6 - realizar a implementacao do callback do retrofit e chamar o metodo setupAdapter se retornar os dados com sucesso
-        githubApi.getAllRepositoriesByUser("mwitt99").enqueue(object : Callback<List<Repository>>{
-            override fun onResponse(
-                call: Call<List<Repository>>,
-                response: Response<List<Repository>>) {
-                if(response.isSuccessful){
-                    progress.isVisible = false
-                    response.body().let{
-                        setupAdapter(it)
+
+
+    fun setupAdapter(list: List<Repository>) {
+            val repAdapter = RepositoryAdapter(
+                this, list)
+            listaRepositories.adapter = repAdapter
+    }
+
+    fun isInternetAvailable(): Boolean {
+        val connectivityManager =
+        getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+        val networkCapabilities = connectivityManager.activeNetwork ?: return false
+        val actNw = connectivityManager.getNetworkCapabilities(networkCapabilities) ?: return false
+        return actNw.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+            actNw.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ||
+            actNw.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+    }
+fun getAllReposByUserName(userName: String) { //Método responsável por buscar todos os repositórios do usuário fornecido
+
+    if (userName.isNotEmpty()) {
+
+        progress.isVisible = true
+
+        githubApi.getAllRepositoriesByUser(userName)
+            .enqueue(object : Callback<List<Repository>> {
+
+                override fun onResponse(
+                    call: Call<List<Repository>>,
+                    response: Response<List<Repository>>
+                ) {
+                    if (response.isSuccessful) {
+
+                        progress.isVisible = false
+                        listaRepositories.isVisible = true
+
+                        val repositories = response.body()
+
+                        repositories?.let {
+                            setupAdapter(repositories)
+                        }
+
+                    } else {
+
+                        progress.isVisible = false
+
+                        val context = applicationContext
+                        Toast.makeText(context, R.string.response_error, Toast.LENGTH_LONG)
+                            .show()
                     }
                 }
-            }
-        })
 
-    }
+                override fun onFailure(call: Call<List<Repository>>, t: Throwable) {
 
-    // Metodo responsavel por realizar a configuracao do adapter
-    fun setupAdapter(list: List<Repository>) {
-        /*
-            @TODO 7 - Implementar a configuracao do Adapter , construir o adapter e instancia-lo
-            passando a listagem dos repositorios
-         */
-        val repAdapter = RepositoryAdapter(list)
-        listaRepositories.apply {
-            isVisible = true
-            adapter = repAdapter
+                    progress.isVisible = false
+
+                    val context = applicationContext
+                    Toast.makeText(context, R.string.response_error, Toast.LENGTH_LONG).show()
+                }
+
+            })
         }
-
-    }
-
-
-
-    // Metodo responsavel por compartilhar o link do repositorio selecionado
-    // @Todo 11 - Colocar esse metodo no click do share item do adapter
-    fun shareRepositoryLink(urlRepository: String) {
-        val sendIntent: Intent = Intent().apply {
-            action = Intent.ACTION_SEND
-            putExtra(Intent.EXTRA_TEXT, urlRepository)
-            type = "text/plain"
-        }
-
-        val shareIntent = Intent.createChooser(sendIntent, null)
-        // startActivity(shareIntent)
-    }
-
-    // Metodo responsavel por abrir o browser com o link informado do repositorio
-
-    // @Todo 12 - Colocar esse metodo no click item do adapter
-    fun openBrowser(urlRepository: String) {
-        startActivity(
-            Intent(
-                Intent.ACTION_VIEW,
-                Uri.parse(urlRepository)
-            )
-        )
-
     }
 }
+
 
